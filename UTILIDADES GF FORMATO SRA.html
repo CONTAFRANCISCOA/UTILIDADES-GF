@@ -1,0 +1,1207 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>GF Diversiones - Estado de Resultados</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'DM Sans',sans-serif; background:#f5f3ef; color:#1a1a1a; }
+::-webkit-scrollbar { width:4px; }
+::-webkit-scrollbar-thumb { background:#ccc; border-radius:4px; }
+select { -webkit-appearance:none; appearance:none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useMemo, useEffect, useCallback, useRef } = React;
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  CONFIGURA TU URL DE APPS SCRIPT AQUÍ                       ║
+// ║  Después de implementar Code_Utilidades.gs, pega la URL:    ║
+// ╚══════════════════════════════════════════════════════════════╝
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyGeAlUq8zC9jvfFuecLXIDuUlRHE7GG_hVi8a5kNWsv_kquhXahwWYFR_UQN3nm42w/exec";  // ← Pega aquí tu URL de implementación
+
+// ── Helpers ──
+const fmt = (n) => { if(n===null||n===undefined||isNaN(n))return"—"; const a=Math.abs(n); if(a>=1e6)return(n<0?"-":"")+"$"+(a/1e6).toFixed(2)+"M"; return(n<0?"-":"")+"$"+a.toLocaleString("es-MX",{minimumFractionDigits:0,maximumFractionDigits:0}); };
+const fmtPct = (n) => { if(n===null||n===undefined||isNaN(n))return"—"; return(n*100).toFixed(1)+"%"; };
+const fmtNum = (n) => (n===null||n===undefined||isNaN(n))?"—":n.toLocaleString("es-MX");
+const sumField = (arr, f) => arr.reduce((s,r) => s+(r[f]||0), 0);
+const FIELDS = ["tickets","ventaTotal","ventaNeta","diferencia","pTarjeta","efectivo","sueldos","extras","gastos","faltantes","gastosSuc","efectivoNeto","utBrutSuc","finiquitos","nomina","gastosMayores","rentas","manttos","socComer","ebitda","imss","impuestos","utNeta"];
+const aggregate = (rows) => { const d={}; FIELDS.forEach(f=>d[f]=sumField(rows,f)); return d; };
+
+// ── JSONP Fetch ──
+let jsonpCounter = 0;
+function fetchJSONP(url) {
+  return new Promise((resolve, reject) => {
+    const cbName = "__utilidades_cb_" + (++jsonpCounter);
+    const script = document.createElement("script");
+    const timeout = setTimeout(() => { cleanup(); reject(new Error("Timeout")); }, 15000);
+    function cleanup() { clearTimeout(timeout); delete window[cbName]; if(script.parentNode) script.parentNode.removeChild(script); }
+    window[cbName] = (data) => { cleanup(); resolve(data); };
+    script.src = url + (url.indexOf("?")>=0?"&":"?") + "callback=" + cbName;
+    script.onerror = () => { cleanup(); reject(new Error("Network error")); };
+    document.body.appendChild(script);
+  });
+}
+
+// ── Colors ──
+const C = { bg:"#f5f3ef", textPrimary:"#1a1a1a", textSecondary:"#6b7280", textMuted:"#9ca3af", border:"#e5e2dc",
+  ingreso:{bg:"#ecfdf5",border:"#34d399",text:"#065f46",accent:"#10b981"},
+  cobro:{bg:"#eff6ff",border:"#60a5fa",text:"#1e40af",accent:"#3b82f6"},
+  gastoSuc:{bg:"#fef2f2",border:"#f87171",text:"#991b1b",accent:"#ef4444"},
+  operativo:{bg:"#f0fdf4",border:"#86efac",text:"#166534",accent:"#22c55e"},
+  gastoMat:{bg:"#fdf4ff",border:"#c084fc",text:"#6b21a8",accent:"#a855f7"},
+  fiscal:{bg:"#fff7ed",border:"#fb923c",text:"#9a3412",accent:"#f97316"},
+  ebitda:{bg:"#fefce8",border:"#facc15",text:"#854d0e",accent:"#eab308"},
+  utNeta:{bg:"#f0f9ff",border:"#0ea5e9",text:"#0c4a6e",accent:"#0284c7"},
+};
+
+// ── Components ──
+const Section = ({title,total,children,defaultOpen=false,colors}) => {
+  const[open,setOpen]=useState(defaultOpen);
+  return(
+    <div style={{marginBottom:6,borderRadius:12,overflow:"hidden",border:"1px solid "+colors.border+"30",background:colors.bg}}>
+      <button onClick={()=>setOpen(!open)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 16px",border:"none",cursor:"pointer",background:"transparent",fontFamily:"'DM Sans', sans-serif"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div style={{width:4,height:20,borderRadius:2,background:colors.accent}}/>
+          <span style={{fontSize:13,fontWeight:700,color:colors.text,letterSpacing:"0.03em",textTransform:"uppercase"}}>{title}</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontFamily:"'JetBrains Mono', monospace",fontSize:14,fontWeight:700,color:colors.text}}>{total}</span>
+          <span style={{fontSize:10,color:colors.accent,transform:open?"rotate(180deg)":"rotate(0)",transition:"transform 0.2s"}}>▼</span>
+        </div>
+      </button>
+      {open&&<div style={{borderTop:"1px solid "+colors.border+"25"}}>{children}</div>}
+    </div>
+  );
+};
+
+const LineItem = ({label,value,isTotal,indent,negative}) => {
+  const isNeg=negative||(typeof value==="string"&&value.startsWith("-"));
+  return(
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:(isTotal?12:9)+"px 16px",paddingLeft:indent?36:16,background:isTotal?"rgba(0,0,0,0.02)":"transparent",borderBottom:"1px solid rgba(0,0,0,0.04)"}}>
+      <span style={{fontFamily:"'DM Sans', sans-serif",fontSize:13,fontWeight:isTotal?700:400,color:isTotal?C.textPrimary:C.textSecondary}}>{label}</span>
+      <span style={{fontFamily:"'JetBrains Mono', monospace",fontSize:13,fontWeight:isTotal?700:500,color:isNeg?"#dc2626":isTotal?C.textPrimary:C.textSecondary}}>{value}</span>
+    </div>
+  );
+};
+
+const BigResult = ({label,value,colors,negative}) => {
+  const isNeg=negative||(typeof value==="string"&&value.startsWith("-"));
+  return(
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:16,margin:"6px 0",borderRadius:12,background:isNeg?"#fef2f2":colors.bg,border:"2px solid "+(isNeg?"#fca5a5":colors.border)}}>
+      <span style={{fontFamily:"'DM Sans', sans-serif",fontSize:14,fontWeight:800,color:isNeg?"#991b1b":colors.text,letterSpacing:"0.03em"}}>{label}</span>
+      <span style={{fontFamily:"'JetBrains Mono', monospace",fontSize:17,fontWeight:800,color:isNeg?"#dc2626":colors.accent}}>{value}</span>
+    </div>
+  );
+};
+
+const KPI = ({label,value,sub,color,subColor}) => (
+  <div style={{flex:"1 1 45%",minWidth:140,padding:14,borderRadius:12,background:"#fff",border:"1px solid "+C.border,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
+    <div style={{fontFamily:"'DM Sans', sans-serif",fontSize:10,color:C.textMuted,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:6}}>{label}</div>
+    <div style={{fontFamily:"'JetBrains Mono', monospace",fontSize:20,fontWeight:700,color:color||C.textPrimary}}>{value}</div>
+    {sub&&<div style={{fontFamily:"'DM Sans', sans-serif",fontSize:11,color:subColor||C.textMuted,marginTop:4,fontWeight:600}}>{sub}</div>}
+  </div>
+);
+
+const RATIO_OPTIONS = [
+  {key:"ventaTotal",label:"Venta Total"},{key:"ventaNeta",label:"Venta Neta"},
+  {key:"gastosSuc",label:"Gastos Sucursal"},{key:"gastosMatriz",label:"Gastos Matriz"},
+  {key:"gastosTotales",label:"Gastos Totales"},{key:"utBrutSuc",label:"Ut. Bruta Suc"},
+  {key:"ebitda",label:"EBITDA"},{key:"utNeta",label:"Utilidad Neta"},
+  {key:"nomina",label:"Nómina"},{key:"rentas",label:"Rentas"},{key:"sueldos",label:"Sueldos"},
+];
+
+const MESES_ORDER = ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO","JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"];
+
+// ── Export helpers ──
+async function doExportPDF(el, filename) {
+  // el = <table>. Su padre tiene overflow:auto que recorta la captura.
+  // Lo exponemos momentáneamente para que html2canvas vea el ancho real.
+  const parent = el.parentElement;
+  const prevOvf = parent ? parent.style.overflowX : '';
+  if (parent) parent.style.overflowX = 'visible';
+
+  try {
+    const W = el.scrollWidth;
+    const H = el.scrollHeight;
+    const canvas = await window.html2canvas(el, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      scrollX: 0,
+      scrollY: 0,
+      width: W,
+      height: H,
+      windowWidth: W + 100,
+    });
+    const imgData = canvas.toDataURL('image/png');
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const margin = 8;
+    const maxW = pageW - margin * 2;
+    const maxH = pageH - margin * 2;
+    const ratio = canvas.width / canvas.height;
+    let imgW = maxW;
+    let imgH = imgW / ratio;
+    if (imgH > maxH) { imgH = maxH; imgW = imgH * ratio; }
+    const x = margin + (maxW - imgW) / 2;
+    const y = margin + (maxH - imgH) / 2;
+    pdf.addImage(imgData, 'PNG', x, y, imgW, imgH);
+    pdf.save(filename + '.pdf');
+  } catch(e) {
+    alert('Error al exportar PDF: ' + e.message);
+  } finally {
+    if (parent) parent.style.overflowX = prevOvf;
+  }
+}
+
+async function doExportPNG(el, filename) {
+  try {
+    const canvas = await window.html2canvas(el, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: null,
+      scrollX: 0,
+      scrollY: 0,
+      width: el.scrollWidth,
+      height: el.scrollHeight,
+      windowWidth: el.scrollWidth,
+    });
+    const link = document.createElement('a');
+    link.download = filename + '.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  } catch(e) { alert('Error al exportar imagen: ' + e.message); }
+}
+
+// ── Dashboard Q ──
+const DQ_QUARTERS = [
+  { key:'Q1', months:['ENERO','FEBRERO','MARZO'] },
+  { key:'Q2', months:['ABRIL','MAYO','JUNIO'] },
+  { key:'Q3', months:['JULIO','AGOSTO','SEPTIEMBRE'] },
+  { key:'Q4', months:['OCTUBRE','NOVIEMBRE','DICIEMBRE'] },
+];
+
+const DK = {
+  bg:'#0f1117', card:'#141929', border:'rgba(255,255,255,0.08)',
+  gold:'#c9a84c', green:'#2dd4a0', red:'#f04f5a', blue:'#4b9fea',
+  text:'#e8eaf0', muted:'#7a8099', purple:'#a78bfa',
+};
+
+function pillStyle(margin, avgEbitda) {
+  if (avgEbitda < 0)  return { bg:'rgba(240,79,90,0.15)',   color:DK.red,    label:'Pérdida'   };
+  if (margin > 45)    return { bg:'rgba(45,212,160,0.15)',  color:DK.green,  label:'Excelente' };
+  if (margin > 25)    return { bg:'rgba(201,168,76,0.15)',  color:DK.gold,   label:'Estable'   };
+  return               { bg:'rgba(240,180,40,0.10)',   color:'#f0b428', label:'En riesgo' };
+}
+
+function DashboardQ({ allData }) {
+  const activeQs = DQ_QUARTERS.filter(q => q.months.some(m => allData[m] && allData[m].length > 0));
+  const [selQ, setSelQ] = useState(() => activeQs.length > 0 ? activeQs[activeQs.length-1].key : 'Q1');
+
+  const qDef = DQ_QUARTERS.find(q => q.key === selQ) || DQ_QUARTERS[0];
+  const qMonths = qDef.months.filter(m => allData[m] && allData[m].length > 0);
+
+  const monthAggs = useMemo(() => qMonths.map(m => ({
+    month: m, short: m.slice(0,3),
+    data: aggregate(allData[m] || [])
+  })), [selQ, allData]);
+
+  const qTot = useMemo(() => {
+    const t = {};
+    FIELDS.forEach(f => { t[f] = monthAggs.reduce((s, ma) => s + (ma.data[f]||0), 0); });
+    return t;
+  }, [monthAggs]);
+
+  const qMargenEbitda = qTot.ventaNeta > 0 ? qTot.ebitda / qTot.ventaNeta * 100 : 0;
+  const qMargenUtNeta = qTot.ventaNeta > 0 ? qTot.utNeta  / qTot.ventaNeta * 100 : 0;
+
+  const branchRanking = useMemo(() => {
+    const set = new Set();
+    qMonths.forEach(m => (allData[m]||[]).forEach(r => r.sucursal && set.add(r.sucursal)));
+    return Array.from(set).map(suc => {
+      const rows = qMonths.map(m => (allData[m]||[]).find(r => r.sucursal === suc)).filter(Boolean);
+      const n = rows.length || 1;
+      const sum = f => rows.reduce((s,r) => s+(r[f]||0), 0);
+      const avgVta    = sum('ventaNeta') / n;
+      const avgEbitda = sum('ebitda')    / n;
+      const avgUtNeta = sum('utNeta')    / n;
+      const margin    = avgVta > 0 ? avgEbitda / avgVta * 100 : 0;
+      const vtaArr    = qMonths.map(m => ((allData[m]||[]).find(r => r.sucursal === suc)||{}).ventaNeta||0);
+      return { name:suc, avgVta, avgEbitda, avgUtNeta, margin, vtaArr };
+    }).sort((a,b) => b.avgEbitda - a.avgEbitda);
+  }, [qMonths, allData]);
+
+  const alerts = useMemo(() => {
+    const list = [];
+    branchRanking.filter(b => b.avgEbitda < 0).forEach(b => list.push({
+      type:'danger', title:'🚨 Riesgo Crítico',
+      body:`${b.name} registra EBITDA promedio negativo en ${selQ}.`,
+      value: fmt(b.avgEbitda)
+    }));
+    const star = branchRanking.find(b => b.avgEbitda > 0);
+    if (star) list.push({ type:'good', title:'⭐ Sucursal Estrella',
+      body:`${star.name} lideró ${selQ} con el mayor EBITDA acumulado.`,
+      value: fmt(star.avgEbitda * qMonths.length)
+    });
+    const bestM = [...branchRanking].filter(b => b.avgVta > 0).sort((a,b) => b.margin - a.margin)[0];
+    if (bestM) list.push({ type:'good', title:'✅ Mejor Margen',
+      body:`${bestM.name} mantuvo el margen EBITDA más alto del ${selQ}.`,
+      value: bestM.margin.toFixed(1) + '%'
+    });
+    if (qMonths.length >= 2) {
+      branchRanking.filter(b => {
+        const v = b.vtaArr.filter(x => x > 0);
+        return v.length >= 2 && v.every((x,i) => i===0 || x < v[i-1]);
+      }).forEach(b => list.push({ type:'warn', title:'⚠️ Caída de Ventas',
+        body:`${b.name}: ventas en descenso mes a mes en ${selQ}.`, value:'↓'
+      }));
+    }
+    return list;
+  }, [branchRanking, qMonths, selQ]);
+
+  const dqRef     = useRef(null);
+  const ebitdaRef = useRef(null); const ebitdaInst = useRef(null);
+  const donutRef  = useRef(null); const donutInst  = useRef(null);
+  const projRef   = useRef(null); const projInst   = useRef(null);
+
+  const exportPNG = () => {
+    if (!dqRef.current) return;
+    doExportPNG(dqRef.current, `Dashboard_${selQ}_GF`);
+  };
+
+  // Gráfica margen EBITDA
+  useEffect(() => {
+    if (!ebitdaRef.current || !window.Chart || monthAggs.length === 0) return;
+    if (ebitdaInst.current) { ebitdaInst.current.destroy(); ebitdaInst.current = null; }
+    const margins = monthAggs.map(m => m.data.ventaNeta > 0 ? m.data.ebitda / m.data.ventaNeta * 100 : 0);
+    const cols    = margins.map(v => v > 40 ? 'rgba(45,212,160,0.85)' : v > 25 ? 'rgba(240,192,64,0.85)' : 'rgba(240,79,90,0.85)');
+    ebitdaInst.current = new window.Chart(ebitdaRef.current, {
+      type: 'bar',
+      data: { labels: monthAggs.map(m => m.short), datasets: [{ data: margins, backgroundColor: cols, borderRadius: 8, borderSkipped: false }] },
+      options: { responsive:true, maintainAspectRatio:false,
+        plugins: { legend:{ display:false }, tooltip:{ callbacks:{ label: ctx => ` ${ctx.raw.toFixed(1)}%` } } },
+        scales: {
+          y: { min:0, ticks:{ color:'#7a8099', callback: v => v+'%' }, grid:{ color:'rgba(255,255,255,0.05)' }, border:{ display:false } },
+          x: { ticks:{ color:'#7a8099' }, grid:{ display:false }, border:{ display:false } }
+        }
+      }
+    });
+    return () => { if (ebitdaInst.current) { ebitdaInst.current.destroy(); ebitdaInst.current = null; } };
+  }, [selQ, allData]);
+
+  // Gráfica dona gastos
+  useEffect(() => {
+    if (!donutRef.current || !window.Chart) return;
+    if (donutInst.current) { donutInst.current.destroy(); donutInst.current = null; }
+    const vals = [qTot.nomina||0, qTot.rentas||0, qTot.gastosMayores||0, qTot.manttos||0, qTot.socComer||0, (qTot.imss||0)+(qTot.impuestos||0)];
+    if (vals.every(v => v === 0)) return;
+    donutInst.current = new window.Chart(donutRef.current, {
+      type: 'doughnut',
+      data: {
+        labels: ['Nómina','Rentas','Gastos Mayores','Manttos','Soc. Comercial','IMSS+Imp.'],
+        datasets: [{ data: vals,
+          backgroundColor: ['rgba(75,159,234,0.8)','rgba(240,79,90,0.8)','rgba(201,168,76,0.8)','rgba(45,212,160,0.8)','rgba(167,139,250,0.8)','rgba(251,146,60,0.8)'],
+          borderColor: '#141929', borderWidth: 3
+        }]
+      },
+      options: { responsive:true, maintainAspectRatio:false, cutout:'60%',
+        plugins: {
+          legend: { position:'bottom', labels:{ color:'#9ca3af', padding:10, font:{ size:10 }, usePointStyle:true, boxWidth:8 } },
+          tooltip: { callbacks:{ label: ctx => ` $${Math.round(ctx.raw).toLocaleString('es-MX')}` } }
+        }
+      }
+    });
+    return () => { if (donutInst.current) { donutInst.current.destroy(); donutInst.current = null; } };
+  }, [selQ, allData]);
+
+  // Gráfica proyecciones
+  useEffect(() => {
+    if (!projRef.current || !window.Chart || monthAggs.length === 0) return;
+    if (projInst.current) { projInst.current.destroy(); projInst.current = null; }
+    const qIdx    = DQ_QUARTERS.findIndex(q => q.key === selQ);
+    const qStart  = qIdx * 3;
+    const qEnd    = qStart + monthAggs.length;
+    const baseAvg = qTot.ventaNeta / (monthAggs.length || 1);
+    const allLabels = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+    const realData  = new Array(12).fill(null);
+    monthAggs.forEach((m,i) => { realData[qStart+i] = +(m.data.ventaNeta/1e6).toFixed(3); });
+    const mkScen = rate => {
+      const d = new Array(12).fill(null);
+      let last = baseAvg;
+      for (let i = qEnd; i < 12; i++) { last *= (1+rate); d[i] = +(last/1e6).toFixed(3); }
+      return d;
+    };
+    projInst.current = new window.Chart(projRef.current, {
+      type: 'line',
+      data: { labels: allLabels, datasets: [
+        { label:'Real '+selQ, data:realData, borderColor:'#4b9fea', backgroundColor:'rgba(75,159,234,0.1)', borderWidth:3, pointRadius:5, pointBackgroundColor:'#4b9fea', tension:0.3, fill:true },
+        { label:'Conservador +3%', data:mkScen(0.03), borderColor:'rgba(167,139,250,0.9)', borderWidth:2, pointRadius:2, tension:0.4, borderDash:[6,3], fill:false },
+        { label:'Base +5%', data:mkScen(0.05), borderColor:'#c9a84c', borderWidth:2.5, pointRadius:3, tension:0.4, fill:false },
+        { label:'Optimista +8%', data:mkScen(0.08), borderColor:'#2dd4a0', borderWidth:2, pointRadius:2, tension:0.4, fill:false },
+      ]},
+      options: { responsive:true, maintainAspectRatio:false,
+        plugins: {
+          legend: { position:'top', labels:{ color:'#9ca3af', padding:10, font:{ size:10 }, usePointStyle:true, boxWidth:8 } },
+          tooltip: { callbacks:{ label: ctx => ctx.raw != null ? ` ${ctx.dataset.label}: $${(+ctx.raw).toFixed(2)}M` : '' } }
+        },
+        scales: {
+          y: { ticks:{ color:'#7a8099', callback: v => '$'+v.toFixed(1)+'M' }, grid:{ color:'rgba(255,255,255,0.05)' }, border:{ display:false } },
+          x: { ticks:{ color:'#7a8099' }, grid:{ display:false }, border:{ display:false } }
+        }
+      }
+    });
+    return () => { if (projInst.current) { projInst.current.destroy(); projInst.current = null; } };
+  }, [selQ, allData]);
+
+  const annualProj = useMemo(() => {
+    const qIdx    = DQ_QUARTERS.findIndex(q => q.key === selQ);
+    const qEnd    = qIdx * 3 + monthAggs.length;
+    const baseAvg = monthAggs.length > 0 ? qTot.ventaNeta / monthAggs.length : 0;
+    const scenario = rate => {
+      let total = qTot.ventaNeta, last = baseAvg;
+      for (let i = qEnd; i < 12; i++) { last *= (1+rate); total += last; }
+      return total;
+    };
+    return [
+      { label:'Conservador +3%/mes', vtas: scenario(0.03) },
+      { label:'Base +5%/mes',        vtas: scenario(0.05) },
+      { label:'Optimista +8%/mes',   vtas: scenario(0.08) },
+    ].map(s => ({ ...s, ebitda: s.vtas * 0.375 }));
+  }, [selQ, monthAggs, qTot]);
+
+  const topEbitda = branchRanking[0] ? branchRanking[0].avgEbitda : 1;
+
+  const kpiCards = [
+    { label:`Venta Neta ${selQ}`,  val:fmt(qTot.ventaNeta),  sub:`${fmt(Math.round(qTot.ventaNeta/(monthAggs.length||1)))}/mes`,  color:DK.blue,   accent:'#4b9fea' },
+    { label:`EBITDA ${selQ}`,      val:fmt(qTot.ebitda),     sub:`${qMargenEbitda.toFixed(1)}% margen`,                           color:qTot.ebitda>=0?DK.green:DK.red, accent:'#2dd4a0' },
+    { label:`Ut. Neta ${selQ}`,    val:fmt(qTot.utNeta),     sub:`${qMargenUtNeta.toFixed(1)}% margen`,                           color:qTot.utNeta>=0?DK.gold:DK.red,  accent:'#c9a84c' },
+    { label:`Tickets ${selQ}`,     val:(qTot.tickets||0).toLocaleString('es-MX'), sub:`${Math.round((qTot.tickets||0)/(monthAggs.length||1)).toLocaleString('es-MX')}/mes`, color:DK.purple, accent:'#a78bfa' },
+  ];
+
+  return (
+    <div ref={dqRef} style={{background:DK.bg, color:DK.text, fontFamily:"'DM Sans', sans-serif", maxWidth:520, margin:'0 auto', padding:'16px 12px 48px'}}>
+
+      {/* Selector de trimestre + botón export */}
+      <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:16, overflowX:'auto', paddingBottom:2}}>
+        {activeQs.map(q => (
+          <button key={q.key} onClick={() => setSelQ(q.key)} style={{
+            flexShrink:0, padding:'7px 20px', borderRadius:20, cursor:'pointer',
+            border:'1px solid '+(selQ===q.key ? DK.gold : DK.border),
+            background: selQ===q.key ? 'rgba(201,168,76,0.12)' : 'transparent',
+            color: selQ===q.key ? DK.gold : DK.muted,
+            fontSize:12, fontWeight:700, fontFamily:"'DM Sans', sans-serif", transition:'all 0.2s'
+          }}>{q.key}</button>
+        ))}
+        <button onClick={exportPNG} style={{
+          flexShrink:0, marginLeft:'auto', padding:'7px 14px', borderRadius:20, cursor:'pointer',
+          border:'1px solid rgba(167,139,250,0.4)', background:'rgba(167,139,250,0.1)',
+          color:DK.purple, fontSize:11, fontWeight:700, fontFamily:"'DM Sans', sans-serif",
+          whiteSpace:'nowrap', transition:'all 0.2s'
+        }}>🖼️ Imagen</button>
+      </div>
+
+      {qMonths.length === 0 ? (
+        <div style={{textAlign:'center', padding:40, color:DK.muted, fontSize:13}}>Sin datos para {selQ}</div>
+      ) : (<>
+
+        <div style={{fontSize:10, color:DK.muted, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:16}}>
+          {qMonths.join(' · ')} · {branchRanking.length} sucursales
+        </div>
+
+        {/* KPI 2×2 */}
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:14}}>
+          {kpiCards.map((k,i) => (
+            <div key={i} style={{background:DK.card, border:'1px solid '+DK.border, borderRadius:14, padding:'14px 13px', position:'relative', overflow:'hidden'}}>
+              <div style={{position:'absolute', top:0, left:0, right:0, height:2, background:`linear-gradient(90deg,transparent,${k.accent},transparent)`}}/>
+              <div style={{fontSize:9, color:DK.muted, letterSpacing:'0.1em', textTransform:'uppercase', marginBottom:8, lineHeight:1.3}}>{k.label}</div>
+              <div style={{fontFamily:"'JetBrains Mono', monospace", fontSize:17, fontWeight:700, color:k.color, lineHeight:1.1}}>{k.val}</div>
+              <div style={{fontSize:10, color:DK.muted, marginTop:5}}>{k.sub}</div>
+            </div>
+          ))}
+        </div>
+
+
+        {/* Dona gastos matriz */}
+        <div style={{background:DK.card, border:'1px solid '+DK.border, borderRadius:14, padding:'16px 14px', marginBottom:12}}>
+          <div style={{fontSize:9, color:DK.muted, letterSpacing:'0.1em', textTransform:'uppercase', marginBottom:12}}>Distribución Gastos Matriz — {selQ}</div>
+          <div style={{height:210, position:'relative'}}><canvas ref={donutRef}/></div>
+        </div>
+
+        {/* Ranking */}
+        <div style={{background:DK.card, border:'1px solid '+DK.border, borderRadius:14, overflow:'hidden', marginBottom:12}}>
+          <div style={{padding:'12px 14px', borderBottom:'1px solid '+DK.border, fontSize:9, color:DK.muted, letterSpacing:'0.1em', textTransform:'uppercase'}}>
+            Ranking de Sucursales — {selQ}
+          </div>
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%', borderCollapse:'collapse', fontSize:10, minWidth:340}}>
+              <thead>
+                <tr style={{background:'rgba(0,0,0,0.2)'}}>
+                  {['#','Sucursal','Vta/mes','EBITDA Prom','Margen','Ut. Neta','Estado'].map((h,i) => (
+                    <th key={i} style={{padding:'8px 9px', textAlign:i<2?'left':'right', color:DK.muted, fontWeight:500, fontSize:8, letterSpacing:'0.06em', textTransform:'uppercase', whiteSpace:'nowrap'}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {branchRanking.map((b,i) => {
+                  const ps  = pillStyle(b.margin, b.avgEbitda);
+                  const barW = topEbitda > 0 ? Math.max(0, b.avgEbitda / topEbitda * 100) : 0;
+                  return (
+                    <tr key={b.name} style={{borderBottom:'1px solid rgba(255,255,255,0.04)'}}>
+                      <td style={{padding:'8px 9px', color:DK.muted, fontSize:9}}>{i+1}</td>
+                      <td style={{padding:'8px 9px', color:DK.text, fontWeight:600, maxWidth:88, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{b.name}</td>
+                      <td style={{padding:'8px 9px', textAlign:'right', fontFamily:"'JetBrains Mono', monospace", color:DK.muted, fontSize:9}}>{fmt(b.avgVta)}</td>
+                      <td style={{padding:'8px 9px', textAlign:'right', fontFamily:"'JetBrains Mono', monospace", color:b.avgEbitda>=0?DK.green:DK.red, fontWeight:700, fontSize:9}}>{fmt(b.avgEbitda)}</td>
+                      <td style={{padding:'8px 9px', textAlign:'right'}}>
+                        <div style={{display:'flex', alignItems:'center', gap:5, justifyContent:'flex-end'}}>
+                          <div style={{width:34, height:3, borderRadius:2, background:'rgba(255,255,255,0.07)', overflow:'hidden'}}>
+                            <div style={{height:'100%', width:barW+'%', background:ps.color, borderRadius:2}}/>
+                          </div>
+                          <span style={{fontSize:9, color:ps.color, fontWeight:700, whiteSpace:'nowrap'}}>{b.margin.toFixed(1)}%</span>
+                        </div>
+                      </td>
+                      <td style={{padding:'8px 9px', textAlign:'right', fontFamily:"'JetBrains Mono', monospace", color:DK.muted, fontSize:9}}>{fmt(b.avgUtNeta)}</td>
+                      <td style={{padding:'8px 9px', textAlign:'right'}}>
+                        <span style={{fontSize:8, fontWeight:700, padding:'2px 7px', borderRadius:10, background:ps.bg, color:ps.color, whiteSpace:'nowrap'}}>{ps.label}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Alertas */}
+        {alerts.length > 0 && (
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:9, color:DK.muted, letterSpacing:'0.1em', textTransform:'uppercase', marginBottom:10}}>Alertas Automáticas</div>
+            {alerts.map((a,i) => (
+              <div key={i} style={{marginBottom:8, padding:'12px 14px', borderRadius:12,
+                borderLeft:'3px solid '+(a.type==='danger'?DK.red:a.type==='good'?DK.green:'#f0b428'),
+                background:a.type==='danger'?'rgba(240,79,90,0.07)':a.type==='good'?'rgba(45,212,160,0.07)':'rgba(240,180,40,0.07)'}}>
+                <div style={{fontSize:9, fontWeight:700, letterSpacing:'0.1em', textTransform:'uppercase', color:a.type==='danger'?DK.red:a.type==='good'?DK.green:'#f0b428', marginBottom:4}}>{a.title}</div>
+                <div style={{fontSize:12, color:DK.text, lineHeight:1.5}}>{a.body}</div>
+                <div style={{fontFamily:"'JetBrains Mono', monospace", fontSize:17, fontWeight:700, color:a.type==='danger'?DK.red:a.type==='good'?DK.green:'#f0b428', marginTop:6}}>{a.value}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+
+      </>)}
+    </div>
+  );
+}
+
+// ── Histórico por Sucursal ──
+const H_QUARTERS = [
+  { key:'Q1', months:['ENERO','FEBRERO','MARZO'] },
+  { key:'Q2', months:['ABRIL','MAYO','JUNIO'] },
+  { key:'Q3', months:['JULIO','AGOSTO','SEPTIEMBRE'] },
+  { key:'Q4', months:['OCTUBRE','NOVIEMBRE','DICIEMBRE'] },
+];
+
+const H_ROWS = [
+  { type:'section', label:'INGRESOS' },
+  { label:'Venta Total',     key:'ventaTotal',     fmt:'money' },
+  { label:'Venta Neta',      key:'ventaNeta',      fmt:'money', bold:true },
+  { label:'Diferencia',      key:'diferencia',     fmt:'money', signed:true },
+  { type:'section', label:'GASTOS SUCURSAL' },
+  { label:'Gastos Suc.',     key:'gastosSuc',      fmt:'money' },
+  { label:'Ut. Bruta Suc.',  key:'utBrutSuc',      fmt:'money', bold:true },
+  { type:'section', label:'GASTOS MATRIZ' },
+  { label:'Nómina',          key:'nomina',         fmt:'money', indent:true },
+  { label:'Rentas',          key:'rentas',         fmt:'money', indent:true },
+  { label:'Gtos. Mayores',   key:'gastosMayores',  fmt:'money', indent:true },
+  { label:'Manttos',         key:'manttos',        fmt:'money', indent:true },
+  { label:'Soc. Comercial',  key:'socComer',       fmt:'money', indent:true },
+  { label:'Total Matriz',    key:'__gastosMatriz', fmt:'money', bold:true },
+  { type:'section', label:'RESULTADO' },
+  { label:'EBITDA',          key:'ebitda',         fmt:'money', bold:true, hl:'ebitda' },
+  { label:'Mrg. EBITDA',     key:'__mrgebitda',    fmt:'pct',             hl:'ebitda' },
+  { label:'IMSS',            key:'imss',           fmt:'money', indent:true },
+  { label:'Impuestos',       key:'impuestos',      fmt:'money', indent:true },
+  { label:'Ut. Neta',        key:'utNeta',         fmt:'money', bold:true, hl:'utneta' },
+  { label:'Mrg. Ut. Neta',   key:'__mrgutneta',    fmt:'pct',             hl:'utneta' },
+  { type:'section', label:'OTROS' },
+  { label:'Tickets',         key:'tickets',        fmt:'num' },
+];
+
+function buildCol(rows, branch, label, subLabel) {
+  const d = branch === 'GLOBAL' ? aggregate(rows) : (rows.find(r => r.sucursal === branch) || aggregate([]));
+  const gastosMatriz = (d.finiquitos||0)+(d.nomina||0)+(d.gastosMayores||0)+(d.rentas||0)+(d.manttos||0)+(d.socComer||0);
+  return { label, subLabel: subLabel||'', d, gastosMatriz,
+    mrgebitda: d.ventaNeta ? d.ebitda/d.ventaNeta*100 : 0,
+    mrgutneta: d.ventaNeta ? d.utNeta/d.ventaNeta*100  : 0 };
+}
+
+function HistoricoView({ allData }) {
+  const [branch, setBranch] = useState('GLOBAL');
+  const [showMenu, setShowMenu] = useState(false);
+  const [viewMode, setViewMode] = useState('mensual');
+  const tableRef = useRef(null);
+
+  const exportPDF = () => {
+    if (!tableRef.current) return;
+    doExportPDF(tableRef.current, `Historico_${branch}_GF`);
+  };
+
+  const availableMonths = useMemo(() =>
+    MESES_ORDER.filter(m => allData[m] && allData[m].length > 0)
+  , [allData]);
+
+  const allBranches = useMemo(() => {
+    const set = new Set();
+    Object.values(allData).forEach(rows => {
+      if (Array.isArray(rows)) rows.forEach(r => r.sucursal && set.add(r.sucursal));
+    });
+    return ['GLOBAL', ...Array.from(set)];
+  }, [allData]);
+
+  const cols = useMemo(() => {
+    if (viewMode === 'mensual') {
+      return availableMonths.map(m =>
+        buildCol(allData[m]||[], branch, m.slice(0,3), m)
+      );
+    }
+    // trimestral
+    return H_QUARTERS.map(q => {
+      const qm = q.months.filter(m => availableMonths.includes(m));
+      if (!qm.length) return null;
+      let rows = [];
+      qm.forEach(m => {
+        const mr = allData[m] || [];
+        if (branch === 'GLOBAL') rows = rows.concat(mr);
+        else { const r = mr.find(r => r.sucursal === branch); if(r) rows.push(r); }
+      });
+      return buildCol(rows, 'GLOBAL', q.key, qm.map(m=>m.slice(0,3)).join('-'));
+    }).filter(Boolean);
+  }, [viewMode, branch, allData, availableMonths]);
+
+  const totalCol = useMemo(() => {
+    if (cols.length === 0) return null;
+    const d = {};
+    FIELDS.forEach(f => { d[f] = cols.reduce((s, col) => s + (col.d[f] || 0), 0); });
+    const gastosMatriz = cols.reduce((s, col) => s + (col.gastosMatriz || 0), 0);
+    const mrgebitda = d.ventaNeta ? d.ebitda / d.ventaNeta * 100 : 0;
+    const mrgutneta = d.ventaNeta ? d.utNeta  / d.ventaNeta * 100 : 0;
+    return { label:'TOTAL', subLabel: viewMode==='mensual' ? `${cols.length} meses` : `${cols.length} trimestres`, d, gastosMatriz, mrgebitda, mrgutneta };
+  }, [cols, viewMode]);
+
+  const getVal = (col, key) => {
+    if (key==='__gastosMatriz') return col.gastosMatriz;
+    if (key==='__mrgebitda')    return col.mrgebitda;
+    if (key==='__mrgutneta')    return col.mrgutneta;
+    return col.d[key] || 0;
+  };
+
+  const fmtVal = (val, fmtType) => {
+    if (fmtType==='money') return fmt(val);
+    if (fmtType==='pct')   return val.toFixed(1)+'%';
+    if (fmtType==='num')   return Math.round(val).toLocaleString('es-MX');
+    return String(val);
+  };
+
+  const getColor = (val, row) => {
+    if (row.hl==='ebitda') return val>=0 ? '#16a34a' : '#dc2626';
+    if (row.hl==='utneta') return val>=0 ? '#0284c7' : '#dc2626';
+    if (row.signed)        return val<0  ? '#dc2626' : C.textPrimary;
+    if (row.fmt==='pct')   return val>=0 ? '#0284c7' : '#dc2626';
+    return row.bold ? C.textPrimary : C.textSecondary;
+  };
+
+  const LABEL_W = 118;
+  const COL_W   = 88;
+
+  const thStyle = (sticky) => ({
+    padding:'9px 8px', fontFamily:"'DM Sans', sans-serif", fontSize:10,
+    fontWeight:700, color: C.textMuted, textTransform:'uppercase',
+    letterSpacing:'0.06em', background:'#f8fafc',
+    borderBottom:'2px solid '+C.border, whiteSpace:'nowrap',
+    ...(sticky ? { position:'sticky', left:0, zIndex:2, textAlign:'left', minWidth:LABEL_W, maxWidth:LABEL_W } : { textAlign:'right', minWidth:COL_W })
+  });
+
+  const tdLabel = (row) => ({
+    position:'sticky', left:0, zIndex:1,
+    background: row.indent ? '#fafafa' : '#fff',
+    padding:'7px 8px', paddingLeft: row.indent ? 18 : 10,
+    fontFamily:"'DM Sans', sans-serif",
+    fontSize: row.bold ? 11 : 10,
+    fontWeight: row.bold ? 700 : 400,
+    color: row.bold ? C.textPrimary : C.textSecondary,
+    borderBottom:'1px solid rgba(0,0,0,0.04)',
+    minWidth:LABEL_W, maxWidth:LABEL_W, whiteSpace:'nowrap',
+    borderRight:'1px solid '+C.border,
+  });
+
+  const tdVal = (row, val) => ({
+    padding:'7px 8px', textAlign:'right',
+    fontFamily:"'JetBrains Mono', monospace",
+    fontSize: row.bold ? 11 : 10,
+    fontWeight: row.bold ? 700 : 400,
+    color: getColor(val, row),
+    borderBottom:'1px solid rgba(0,0,0,0.04)',
+    whiteSpace:'nowrap', minWidth:COL_W,
+  });
+
+  const tdTotal = (row, val) => ({
+    padding:'7px 10px', textAlign:'right',
+    fontFamily:"'JetBrains Mono', monospace",
+    fontSize: 11, fontWeight: 700,
+    color: getColor(val, row),
+    borderBottom:'1px solid rgba(0,0,0,0.06)',
+    borderLeft:'2px solid #e2e8f0',
+    background:'#fafaf5',
+    whiteSpace:'nowrap', minWidth:COL_W,
+  });
+
+  return (
+    <div style={{background:C.bg, minHeight:'100vh', fontFamily:"'DM Sans', sans-serif", maxWidth:520, margin:'0 auto', paddingBottom:48}}>
+
+      {/* Controls */}
+      <div style={{padding:'14px 16px 10px', background:'#fff', borderBottom:'1px solid '+C.border}}>
+
+        {/* Toggle mensual / trimestral */}
+        <div style={{display:'flex', gap:6, marginBottom:12}}>
+          {['mensual','trimestral'].map(m => (
+            <button key={m} onClick={()=>setViewMode(m)} style={{
+              flex:1, padding:'8px', borderRadius:8, border:'1px solid '+(viewMode===m?'#0284c7':C.border),
+              background: viewMode===m ? '#eff6ff' : 'transparent',
+              color: viewMode===m ? '#0284c7' : C.textSecondary,
+              fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:"'DM Sans', sans-serif",
+              textTransform:'capitalize', transition:'all 0.2s'
+            }}>{m==='mensual'?'📅 Mensual':'📊 Por Trimestre'}</button>
+          ))}
+        </div>
+
+        {/* Branch selector */}
+        <div style={{position:'relative'}}>
+          <button onClick={()=>setShowMenu(!showMenu)} style={{
+            width:'100%', padding:'10px 14px', borderRadius:10,
+            border:'1px solid '+C.border, background:'#f8fafc', color:C.textPrimary,
+            fontSize:13, fontWeight:600, cursor:'pointer', fontFamily:"'DM Sans', sans-serif",
+            display:'flex', justifyContent:'space-between', alignItems:'center'
+          }}>
+            <span style={{display:'flex', alignItems:'center', gap:8}}>
+              <span style={{fontSize:10, color:C.textMuted}}>SUCURSAL:</span>
+              {branch==='GLOBAL'?'🌐 CONSOLIDADO GLOBAL':branch}
+            </span>
+            <span style={{fontSize:10, color:C.textMuted}}>▼</span>
+          </button>
+          {showMenu && (
+            <div style={{position:'absolute', top:'100%', left:0, right:0, zIndex:100,
+              background:'#fff', border:'1px solid '+C.border, borderRadius:10, marginTop:4,
+              maxHeight:280, overflowY:'auto', boxShadow:'0 12px 40px rgba(0,0,0,0.12)'}}>
+              {allBranches.map(b => (
+                <button key={b} onClick={()=>{setBranch(b);setShowMenu(false);}} style={{
+                  width:'100%', padding:'10px 14px', border:'none', cursor:'pointer',
+                  background:b===branch?'#eff6ff':'transparent',
+                  color:b===branch?'#0284c7':C.textSecondary,
+                  fontSize:12, fontWeight:b===branch?700:400,
+                  textAlign:'left', fontFamily:"'DM Sans', sans-serif",
+                  borderBottom:'1px solid '+C.border+'40'
+                }}>
+                  {b==='GLOBAL'?'🌐 CONSOLIDADO GLOBAL':b}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Info bar */}
+      <div style={{padding:'8px 16px', fontSize:10, color:C.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+        <span>{branch==='GLOBAL'?'Consolidado global':branch}</span>
+        <div style={{display:'flex', alignItems:'center', gap:10}}>
+          <span>{viewMode==='mensual'?`${cols.length} meses`:`${cols.length} trimestres`}</span>
+          <button onClick={exportPDF} style={{
+            padding:'5px 12px', borderRadius:16, cursor:'pointer',
+            border:'1px solid #0284c720', background:'#eff6ff',
+            color:'#0284c7', fontSize:10, fontWeight:700, fontFamily:"'DM Sans', sans-serif",
+            whiteSpace:'nowrap', letterSpacing:'0.04em', textTransform:'none'
+          }}>📄 PDF</button>
+        </div>
+      </div>
+
+      {/* Table */}
+      {cols.length === 0 ? (
+        <div style={{textAlign:'center', padding:48, color:C.textMuted}}>Sin datos disponibles</div>
+      ) : (
+        <div style={{overflowX:'auto', WebkitOverflowScrolling:'touch'}}>
+          <table ref={tableRef} style={{borderCollapse:'collapse', width:'100%', minWidth: LABEL_W + (cols.length + 1) * COL_W}}>
+            <thead>
+              <tr>
+                <th style={thStyle(true)}>Concepto</th>
+                {cols.map((col,i) => (
+                  <th key={i} style={thStyle(false)}>
+                    <div>{col.label}</div>
+                    {col.subLabel && col.subLabel !== col.label && (
+                      <div style={{fontSize:8, fontWeight:400, color:C.textMuted, marginTop:1}}>{col.subLabel}</div>
+                    )}
+                  </th>
+                ))}
+                {totalCol && (
+                  <th style={{...thStyle(false), background:'#f0f9ff', borderLeft:'2px solid #e2e8f0', color:'#0284c7'}}>
+                    <div>TOTAL</div>
+                    <div style={{fontSize:8, fontWeight:400, color:'#7dd3fc', marginTop:1}}>{totalCol.subLabel}</div>
+                  </th>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {H_ROWS.map((row, ri) => {
+                if (row.type === 'section') {
+                  return (
+                    <tr key={ri}>
+                      <td colSpan={cols.length + (totalCol ? 2 : 1)} style={{
+                        padding:'6px 10px', fontSize:9, fontWeight:700,
+                        letterSpacing:'0.1em', textTransform:'uppercase',
+                        color:C.textMuted, background:'#f1f5f9',
+                        borderTop:'1px solid '+C.border, borderBottom:'1px solid '+C.border,
+                        position:'sticky', left:0,
+                      }}>{row.label}</td>
+                    </tr>
+                  );
+                }
+                return (
+                  <tr key={ri} style={{transition:'background 0.1s'}}
+                    onMouseEnter={e=>e.currentTarget.style.background='rgba(0,0,0,0.015)'}
+                    onMouseLeave={e=>e.currentTarget.style.background=''}>
+                    <td style={tdLabel(row)}>{row.label}</td>
+                    {cols.map((col,ci) => {
+                      const val = getVal(col, row.key);
+                      return <td key={ci} style={tdVal(row, val)}>{fmtVal(val, row.fmt)}</td>;
+                    })}
+                    {totalCol && (() => {
+                      const val = getVal(totalCol, row.key);
+                      return <td style={tdTotal(row, val)}>{fmtVal(val, row.fmt)}</td>;
+                    })()}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main App ──
+function App() {
+  const [allData, setAllData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [connected, setConnected] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+  const [diagResult, setDiagResult] = useState(null);
+  const [activeTab, setActiveTab] = useState('er');
+
+  const [month, setMonth] = useState("");
+  const [branch, setBranch] = useState("GLOBAL");
+  const [showMenu, setShowMenu] = useState(false);
+  const [ratioNum, setRatioNum] = useState("utNeta");
+  const [ratioDen, setRatioDen] = useState("ventaNeta");
+
+  // Cargar datos
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+
+    // Intentar desde Apps Script
+    if (APPS_SCRIPT_URL) {
+      try {
+        const data = await fetchJSONP(APPS_SCRIPT_URL);
+        if (data && !data.error) {
+          setAllData(data);
+          setConnected(true);
+          setLastSync(new Date().toLocaleTimeString("es-MX"));
+          localStorage.setItem("utilidades_data", JSON.stringify(data));
+          localStorage.setItem("utilidades_sync", new Date().toISOString());
+          setLoading(false);
+          return;
+        }
+      } catch (e) {
+        console.warn("Apps Script no disponible, usando cache...", e);
+      }
+    }
+
+    // Fallback a localStorage
+    const cached = localStorage.getItem("utilidades_data");
+    if (cached) {
+      try {
+        setAllData(JSON.parse(cached));
+        setConnected(false);
+        const syncDate = localStorage.getItem("utilidades_sync");
+        if (syncDate) setLastSync(new Date(syncDate).toLocaleTimeString("es-MX"));
+        setLoading(false);
+        return;
+      } catch (e) {}
+    }
+
+    // Sin datos
+    setError(APPS_SCRIPT_URL 
+      ? "No se pudo conectar al Sheets y no hay datos en caché." 
+      : "Configura la URL de Apps Script en el archivo HTML.");
+    setLoading(false);
+  }, []);
+
+  const runDiag = useCallback(async () => {
+    setDiagResult("⏳ Inyectando <script> tag de prueba (igual que JSONP real)...");
+    const cbName = "__diag_" + Date.now();
+
+    const result = await new Promise((resolve) => {
+      const script = document.createElement("script");
+      const timer = setTimeout(() => {
+        delete window[cbName];
+        if (script.parentNode) script.parentNode.removeChild(script);
+        resolve({ type: "timeout" });
+      }, 12000);
+
+      window[cbName] = (data) => {
+        clearTimeout(timer);
+        delete window[cbName];
+        if (script.parentNode) script.parentNode.removeChild(script);
+        resolve({ type: "success", data });
+      };
+
+      script.onerror = () => {
+        clearTimeout(timer);
+        delete window[cbName];
+        if (script.parentNode) script.parentNode.removeChild(script);
+        resolve({ type: "scripterror" });
+      };
+
+      script.src = APPS_SCRIPT_URL + "?callback=" + cbName;
+      document.body.appendChild(script);
+    });
+
+    if (result.type === "success") {
+      if (result.data && result.data.error) {
+        setDiagResult(
+          "⚠️ JSONP llegó pero el script devolvió error:\n\n" +
+          JSON.stringify(result.data, null, 2) +
+          "\n\nRevisa los logs en Apps Script → Ejecuciones."
+        );
+      } else {
+        const meses = Object.keys(result.data || {});
+        setDiagResult(
+          "✅ JSONP funciona correctamente.\n" +
+          "Meses con datos: " + (meses.length ? meses.join(", ") : "ninguno — el Sheets no tiene hojas con nombre de mes") +
+          "\n\nPreview:\n" + JSON.stringify(result.data).slice(0, 600)
+        );
+      }
+    } else if (result.type === "scripterror") {
+      setDiagResult(
+        "❌ El <script> tag disparó onerror.\n\n" +
+        "Causas posibles:\n" +
+        "• La URL no existe o fue eliminada\n" +
+        "• La implementación fue despublicada\n" +
+        "• El script retorna un Content-Type que el navegador rechaza\n\n" +
+        "Acción: Abre esta URL en el navegador y revisa qué responde:\n" +
+        APPS_SCRIPT_URL + "?callback=test"
+      );
+    } else {
+      setDiagResult(
+        "⏰ Timeout — el callback nunca llegó (12s).\n\n" +
+        "El servidor responde (confirmado antes) pero el script\n" +
+        "no ejecuta el callback. Causas más comunes:\n\n" +
+        "1. La hoja no tiene hojas con nombre en MAYÚSCULAS\n" +
+        "   (ENERO, FEBRERO…). Verifica los nombres exactos.\n\n" +
+        "2. El script está tardando más de 12s (hoja muy grande).\n\n" +
+        "3. Error silencioso en doGet antes del return.\n\n" +
+        "Acción: Abre esta URL en el navegador para ver la respuesta cruda:\n" +
+        APPS_SCRIPT_URL + "?callback=test"
+      );
+    }
+  }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  // Meses disponibles ordenados
+  const availableMonths = useMemo(() => {
+    if (!allData) return [];
+    return MESES_ORDER.filter(m => allData[m] && allData[m].length > 0);
+  }, [allData]);
+
+  // Seleccionar último mes disponible por defecto
+  useEffect(() => {
+    if (availableMonths.length > 0 && !month) {
+      setMonth(availableMonths[availableMonths.length - 1]);
+    }
+  }, [availableMonths, month]);
+
+  const monthData = (allData && allData[month]) || [];
+
+  const branches = useMemo(() => {
+    if (!allData) return ["GLOBAL"];
+    const all = new Set();
+    Object.values(allData).forEach(rows => {
+      if (Array.isArray(rows)) rows.forEach(r => { if(r.sucursal) all.add(r.sucursal); });
+    });
+    return ["GLOBAL", ...Array.from(all)];
+  }, [allData]);
+
+  const data = useMemo(() => {
+    if (branch === "GLOBAL") return aggregate(monthData);
+    return monthData.find(r => r.sucursal === branch) || aggregate([]);
+  }, [month, branch, monthData]);
+
+  const gastosMatriz = (data.finiquitos||0)+(data.nomina||0)+(data.gastosMayores||0)+(data.rentas||0)+(data.manttos||0)+(data.socComer||0);
+  const gastosTotales = (data.gastosSuc||0)+gastosMatriz;
+  const margenEbitda = data.ventaNeta ? data.ebitda/data.ventaNeta : 0;
+  const margenUtNeta = data.ventaNeta ? data.utNeta/data.ventaNeta : 0;
+  const globalData = useMemo(() => aggregate(monthData), [monthData]);
+  const pctOfGlobalUtNeta = globalData.utNeta ? (data.utNeta/globalData.utNeta) : 0;
+
+  const prevMonthIdx = availableMonths.indexOf(month) - 1;
+  const prevData = useMemo(() => {
+    if (prevMonthIdx < 0 || !allData) return null;
+    const prevRows = allData[availableMonths[prevMonthIdx]] || [];
+    if (branch === "GLOBAL") return aggregate(prevRows);
+    return prevRows.find(r => r.sucursal === branch) || null;
+  }, [month, branch, prevMonthIdx, allData, availableMonths]);
+
+  const pctChangeVN = prevData && prevData.ventaNeta ? ((data.ventaNeta - prevData.ventaNeta) / Math.abs(prevData.ventaNeta)) : null;
+
+  const changeBadge = (pct) => {
+    if (pct === null) return <span style={{fontSize:11,color:C.textMuted}}>Sin periodo anterior</span>;
+    const up = pct >= 0;
+    return <span style={{fontSize:11,fontWeight:600,color:up?"#16a34a":"#dc2626"}}>{up?"▲":"▼"} {Math.abs(pct*100).toFixed(1)}% vs {availableMonths[prevMonthIdx]?.slice(0,3)}</span>;
+  };
+
+  const getVal = (key) => {
+    if (key === "gastosMatriz") return gastosMatriz;
+    if (key === "gastosTotales") return gastosTotales;
+    return data[key] || 0;
+  };
+  const ratioValue = getVal(ratioDen) ? getVal(ratioNum)/getVal(ratioDen) : 0;
+
+  // ── Loading State ──
+  if (loading) {
+    return (
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:C.bg,gap:16}}>
+        <div style={{width:40,height:40,border:"3px solid #e5e2dc",borderTop:"3px solid #0284c7",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+        <div style={{fontSize:14,color:C.textSecondary}}>Conectando con Sheets...</div>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  // ── Error State ──
+  if (error) {
+    return (
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:C.bg,padding:32,textAlign:"center",gap:16}}>
+        <div style={{fontSize:40}}>⚠️</div>
+        <div style={{fontSize:16,fontWeight:700,color:C.textPrimary}}>Sin conexión</div>
+        <div style={{fontSize:13,color:C.textSecondary,maxWidth:300,lineHeight:1.6}}>{error}</div>
+        <button onClick={loadData} style={{padding:"10px 24px",borderRadius:10,border:"none",background:"#0284c7",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans', sans-serif"}}>Reintentar</button>
+        <button onClick={runDiag} style={{padding:"10px 24px",borderRadius:10,border:"1px solid #d97706",background:"#fff7ed",color:"#9a3412",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans', sans-serif"}}>🔍 Diagnóstico</button>
+        {diagResult && (
+          <div style={{marginTop:12,padding:14,borderRadius:10,background:"#1a1a1a",color:"#f0f0f0",fontFamily:"'JetBrains Mono', monospace",fontSize:11,whiteSpace:"pre-wrap",wordBreak:"break-all",textAlign:"left",maxWidth:440,maxHeight:300,overflowY:"auto",lineHeight:1.6}}>
+            {diagResult}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Main UI ──
+  return (
+    <div style={{minHeight:"100vh",background:activeTab==='dq'?DK.bg:C.bg,fontFamily:"'DM Sans', sans-serif"}}>
+      {/* Tab Nav */}
+      <div style={{background:"#fff",borderBottom:"1px solid "+C.border,position:"sticky",top:0,zIndex:20}}>
+        <div style={{maxWidth:520,margin:"0 auto",display:"flex"}}>
+          <button onClick={()=>setActiveTab('er')} style={{flex:1,padding:"13px 4px",border:"none",borderBottom:"3px solid "+(activeTab==='er'?"#0284c7":"transparent"),background:"transparent",color:activeTab==='er'?"#0284c7":C.textSecondary,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.02em",transition:"all 0.2s"}}>Est. Resultados</button>
+          <button onClick={()=>setActiveTab('dq')} style={{flex:1,padding:"13px 4px",border:"none",borderBottom:"3px solid "+(activeTab==='dq'?"#c9a84c":"transparent"),background:"transparent",color:activeTab==='dq'?"#c9a84c":C.textSecondary,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.02em",transition:"all 0.2s"}}>Dashboard Q</button>
+          <button onClick={()=>setActiveTab('hist')} style={{flex:1,padding:"13px 4px",border:"none",borderBottom:"3px solid "+(activeTab==='hist'?"#7c3aed":"transparent"),background:"transparent",color:activeTab==='hist'?"#7c3aed":C.textSecondary,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.02em",transition:"all 0.2s"}}>Histórico</button>
+        </div>
+      </div>
+      {activeTab==='dq'   && <DashboardQ allData={allData}/>}
+      {activeTab==='hist' && <HistoricoView allData={allData}/>}
+      {activeTab==='er'   && <div style={{maxWidth:520,margin:"0 auto"}}>
+      {/* Header */}
+      <div style={{padding:"20px 16px 12px",background:"#fff",borderBottom:"1px solid "+C.border}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+          <div>
+            <div style={{fontSize:10,letterSpacing:"0.15em",color:C.textMuted,textTransform:"uppercase",fontWeight:700}}>GF DIVERSIONES · GRUPO ROKMA</div>
+            <div style={{fontSize:20,fontWeight:800,marginTop:2,letterSpacing:"-0.02em"}}>Estado de Resultados</div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{padding:"4px 10px",borderRadius:8,background:"#f0f9ff",border:"1px solid #bae6fd"}}>
+              <span style={{fontFamily:"'JetBrains Mono', monospace",fontSize:11,fontWeight:700,color:"#0284c7"}}>{fmtNum(data.tickets)} tickets</span>
+            </div>
+            {/* Connection indicator */}
+            <div onClick={loadData} style={{cursor:"pointer",width:10,height:10,borderRadius:"50%",background:connected?"#22c55e":"#f59e0b",border:"2px solid "+(connected?"#16a34a":"#d97706"),title:connected?"Conectado":"Offline"}}/>
+          </div>
+        </div>
+
+        {/* Month tabs */}
+        <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8}}>
+          {availableMonths.map(m =>
+            <button key={m} onClick={() => setMonth(m)} style={{padding:"7px 16px",borderRadius:20,border:"none",cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'DM Sans', sans-serif",whiteSpace:"nowrap",transition:"all 0.2s",background:m===month?"#0284c7":"#f1f5f9",color:m===month?"#fff":C.textSecondary}}>{m.slice(0,3)}</button>
+          )}
+        </div>
+
+        {/* Branch selector */}
+        <div style={{position:"relative",marginTop:8}}>
+          <button onClick={() => setShowMenu(!showMenu)} style={{width:"100%",padding:"10px 14px",borderRadius:10,border:"1px solid "+C.border,background:"#f8fafc",color:C.textPrimary,fontSize:14,fontWeight:600,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",fontFamily:"'DM Sans', sans-serif"}}>
+            <span style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:11,color:C.textMuted}}>SUCURSAL:</span>
+              {branch==="GLOBAL"?"🌐 CONSOLIDADO GLOBAL":branch}
+            </span>
+            <span style={{fontSize:10,color:C.textMuted}}>▼</span>
+          </button>
+          {showMenu && (
+            <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:100,background:"#fff",border:"1px solid "+C.border,borderRadius:10,marginTop:4,maxHeight:320,overflowY:"auto",boxShadow:"0 12px 40px rgba(0,0,0,0.12)"}}>
+              {branches.map(b =>
+                <button key={b} onClick={() => {setBranch(b);setShowMenu(false);}} style={{width:"100%",padding:"11px 14px",border:"none",cursor:"pointer",background:b===branch?"#f0f9ff":"transparent",color:b===branch?"#0284c7":C.textSecondary,fontSize:13,fontWeight:b===branch?700:400,textAlign:"left",fontFamily:"'DM Sans', sans-serif",borderBottom:"1px solid "+C.border+"40",display:"flex",alignItems:"center",gap:8}}>
+                  {b==="GLOBAL"?"🌐 CONSOLIDADO GLOBAL":b}
+                  {b!=="GLOBAL" && monthData.find(r=>r.sucursal===b) && <span style={{marginLeft:"auto",fontSize:11,color:C.textMuted}}>{monthData.find(r=>r.sucursal===b)?.producto}</span>}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* KPIs */}
+      <div style={{display:"flex",flexWrap:"wrap",gap:8,padding:"14px 16px 6px"}}>
+        <KPI label="Venta Neta" value={fmt(data.ventaNeta)} sub={changeBadge(pctChangeVN)} subColor={pctChangeVN>=0?"#16a34a":"#dc2626"}/>
+        <KPI label="EBITDA" value={fmt(data.ebitda)} color={data.ebitda>=0?"#16a34a":"#dc2626"} sub={fmtPct(margenEbitda)+" s/ ventas"}/>
+        <KPI label="Utilidad Neta" value={fmt(data.utNeta)} color={data.utNeta>=0?"#0284c7":"#dc2626"} sub={fmtPct(margenUtNeta)+" s/ ventas"}/>
+        <KPI label="Gastos Totales" value={fmt(gastosTotales)} sub={data.ventaNeta?fmtPct(gastosTotales/data.ventaNeta)+" s/ ventas":"—"}/>
+      </div>
+
+      {/* Estado de Resultados */}
+      <div style={{padding:"8px 16px 40px"}}>
+        <Section title="Ingresos" total={fmt(data.ventaNeta)} colors={C.ingreso} defaultOpen>
+          <LineItem label="Venta Total" value={fmt(data.ventaTotal)}/>
+          <LineItem label="Venta Neta" value={fmt(data.ventaNeta)} isTotal/>
+          <LineItem label="Diferencia" value={fmt(data.diferencia)} negative={data.diferencia<0}/>
+        </Section>
+
+        <Section title="Medios de Cobro" total={fmt((data.pTarjeta||0)+(data.efectivo||0))} colors={C.cobro}>
+          <LineItem label="Pago Tarjeta" value={fmt(data.pTarjeta)} indent/>
+          <LineItem label="Efectivo" value={fmt(data.efectivo)} indent/>
+        </Section>
+
+        <Section title="Gastos de Sucursal" total={fmt(data.gastosSuc)} colors={C.gastoSuc}>
+          <LineItem label="Sueldos" value={fmt(data.sueldos)} indent/>
+          <LineItem label="Extras" value={fmt(data.extras)} indent/>
+          <LineItem label="Gastos" value={fmt(data.gastos)} indent/>
+          <LineItem label="Faltantes" value={fmt(data.faltantes)} indent/>
+        </Section>
+
+        <Section title="Resultado Operativo Suc." total={fmt(data.utBrutSuc)} colors={C.operativo}>
+          <LineItem label="Efectivo Neto" value={fmt(data.efectivoNeto)}/>
+          <LineItem label="Utilidad Bruta Suc." value={fmt(data.utBrutSuc)} isTotal/>
+        </Section>
+
+        <Section title="Gastos de Matriz" total={fmt(gastosMatriz)} colors={C.gastoMat}>
+          <LineItem label="Finiquitos" value={fmt(data.finiquitos)} indent/>
+          <LineItem label="Nómina (prorrateo)" value={fmt(data.nomina)} indent/>
+          <LineItem label="Gastos Mayores" value={fmt(data.gastosMayores)} indent/>
+          <LineItem label="Rentas" value={fmt(data.rentas)} indent/>
+          <LineItem label="Mantenimientos" value={fmt(data.manttos)} indent/>
+          <LineItem label="Soc. Comercial" value={fmt(data.socComer)} indent/>
+        </Section>
+
+        <BigResult label="EBITDA" value={fmt(data.ebitda)} colors={C.ebitda} negative={data.ebitda<0}/>
+
+        <Section title="Deducciones Fiscales" total={fmt((data.imss||0)+(data.impuestos||0))} colors={C.fiscal}>
+          <LineItem label="IMSS" value={fmt(data.imss)} indent/>
+          <LineItem label="Impuestos" value={fmt(data.impuestos)} indent/>
+        </Section>
+
+        <BigResult label="UTILIDAD NETA" value={fmt(data.utNeta)} colors={C.utNeta} negative={data.utNeta<0}/>
+
+        {/* Indicadores */}
+        <div style={{marginTop:16,padding:16,borderRadius:12,background:"#fff",border:"1px solid "+C.border}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.textMuted,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:12}}>Indicadores</div>
+          <div style={{display:"flex",gap:12,marginBottom:16}}>
+            <div style={{flex:1,textAlign:"center",padding:12,borderRadius:10,background:"#f0f9ff"}}>
+              <div style={{fontSize:10,color:"#0c4a6e",letterSpacing:"0.06em",marginBottom:4}}>% EBITDA / VENTAS</div>
+              <div style={{fontFamily:"'JetBrains Mono', monospace",fontSize:20,fontWeight:700,color:data.ebitda>=0?"#0284c7":"#dc2626"}}>{fmtPct(margenEbitda)}</div>
+            </div>
+            <div style={{flex:1,textAlign:"center",padding:12,borderRadius:10,background:branch==="GLOBAL"?"#f8fafc":"#fefce8"}}>
+              <div style={{fontSize:10,color:branch==="GLOBAL"?"#64748b":"#854d0e",letterSpacing:"0.06em",marginBottom:4}}>
+                {branch==="GLOBAL"?"% UT. NETA / VENTAS":"% DE UT. GLOBAL"}
+              </div>
+              <div style={{fontFamily:"'JetBrains Mono', monospace",fontSize:20,fontWeight:700,color:branch==="GLOBAL"?(data.utNeta>=0?"#0284c7":"#dc2626"):(pctOfGlobalUtNeta>=0?"#ca8a04":"#dc2626")}}>
+                {branch==="GLOBAL"?fmtPct(margenUtNeta):fmtPct(pctOfGlobalUtNeta)}
+              </div>
+              {branch!=="GLOBAL"&&<div style={{fontSize:10,color:C.textMuted,marginTop:2}}>Ut. Neta suc / Ut. Neta total</div>}
+            </div>
+          </div>
+
+          {/* Calculadora de Ratio */}
+          <div style={{borderTop:"1px solid "+C.border,paddingTop:14}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.textMuted,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:10}}>Calculadora de Ratio</div>
+            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <select value={ratioNum} onChange={e=>setRatioNum(e.target.value)} style={{flex:1,minWidth:120,padding:"8px 10px",borderRadius:8,border:"1px solid "+C.border,fontSize:12,fontFamily:"'DM Sans', sans-serif",fontWeight:600,background:"#f8fafc",color:C.textPrimary}}>
+                {RATIO_OPTIONS.map(o=><option key={o.key} value={o.key}>{o.label}</option>)}
+              </select>
+              <span style={{fontSize:16,fontWeight:800,color:C.textMuted}}>/</span>
+              <select value={ratioDen} onChange={e=>setRatioDen(e.target.value)} style={{flex:1,minWidth:120,padding:"8px 10px",borderRadius:8,border:"1px solid "+C.border,fontSize:12,fontFamily:"'DM Sans', sans-serif",fontWeight:600,background:"#f8fafc",color:C.textPrimary}}>
+                {RATIO_OPTIONS.map(o=><option key={o.key} value={o.key}>{o.label}</option>)}
+              </select>
+            </div>
+            <div style={{marginTop:10,padding:12,borderRadius:10,background:"#f0f9ff",textAlign:"center"}}>
+              <div style={{fontSize:10,color:"#0c4a6e",marginBottom:4}}>{RATIO_OPTIONS.find(o=>o.key===ratioNum)?.label} / {RATIO_OPTIONS.find(o=>o.key===ratioDen)?.label}</div>
+              <div style={{fontFamily:"'JetBrains Mono', monospace",fontSize:24,fontWeight:800,color:ratioValue>=0?"#0284c7":"#dc2626"}}>{fmtPct(ratioValue)}</div>
+              <div style={{fontSize:10,color:C.textMuted,marginTop:2}}>{fmt(getVal(ratioNum))} / {fmt(getVal(ratioDen))}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Detalle sucursal */}
+        {branch!=="GLOBAL"&&data.razon&&(
+          <div style={{padding:14,margin:"12px 0 0",borderRadius:10,background:"#fff",border:"1px solid "+C.border}}>
+            <div style={{fontSize:11,color:C.textMuted,marginBottom:4}}>DETALLE SUCURSAL</div>
+            <div style={{fontSize:12,color:C.textSecondary,lineHeight:1.7}}>
+              Razón Social: <span style={{color:C.textPrimary,fontWeight:600}}>{data.razon}</span><br/>
+              Producto: <span style={{color:C.textPrimary,fontWeight:600}}>{data.producto}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div style={{textAlign:"center",padding:"20px 16px 4px",fontSize:10,color:C.textMuted}}>
+          GF DIVERSIONES · GRUPO ROKMA · {month} 2026
+        </div>
+        <div style={{textAlign:"center",padding:"0 16px 8px",fontSize:9,color:C.textMuted}}>
+          {connected ? "🟢" : "🟡"} {lastSync ? "Última sync: "+lastSync : "Sin conexión"} · <span onClick={loadData} style={{cursor:"pointer",textDecoration:"underline"}}>Actualizar</span> · <span onClick={runDiag} style={{cursor:"pointer",textDecoration:"underline",color:"#d97706"}}>Diagnóstico</span>
+        </div>
+        {diagResult && (
+          <div style={{margin:"0 16px 16px",padding:14,borderRadius:10,background:"#1a1a1a",color:"#f0f0f0",fontFamily:"'JetBrains Mono', monospace",fontSize:11,whiteSpace:"pre-wrap",wordBreak:"break-all",lineHeight:1.6,maxHeight:300,overflowY:"auto"}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+              <span style={{fontSize:10,color:"#9ca3af",textTransform:"uppercase",letterSpacing:"0.08em"}}>Respuesta cruda del Apps Script</span>
+              <span onClick={()=>setDiagResult(null)} style={{cursor:"pointer",color:"#6b7280",fontSize:12}}>✕</span>
+            </div>
+            {diagResult}
+          </div>
+        )}
+      </div>
+      </div>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
